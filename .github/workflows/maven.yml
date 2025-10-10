@@ -28,6 +28,10 @@ jobs:
         with:
           name: devops-tomcat-demo
           path: target/*.war
+      - run: |
+          echo "OWNER/REPO = ${GITHUB_REPOSITORY}"
+          echo "REF        = ${GITHUB_REF}"
+
 
   deploy:
     needs: build
