@@ -3,62 +3,109 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.120"
+      version = "~> 3.112"
     }
   }
-  # For teams use an azurerm backend; for now keep local state.
-  # backend "azurerm" {}
 }
 
 provider "azurerm" {
   features {}
-  subscription_id = var.subscription_id
-  tenant_id       = var.tenant_id
-  client_id       = var.client_id
-  use_oidc        = true   # GitHub OIDC auth
 }
 
+# ---------------- Variables ----------------
+variable "resource_group_name" { type = string }
+variable "location"            { type = string }
+variable "env_name"            { type = string  default = "aca-env" }
+variable "app_name"            { type = string  default = "tomcat-aca" }
+
+# Docker image to run (e.g. sujith/docker-tomcat:latest)
+variable "docker_image"        { type = string }
+
+# Only required if your Docker Hub repo is private.
+variable "dockerhub_username"  { type = string  default = "" }
+variable "dockerhub_token"     { type = string  default = ""  sensitive = true }
+
+# ---------------- Resources ----------------
+
 resource "azurerm_resource_group" "rg" {
-  name     = var.rg_name
+  name     = var.resource_group_name
   location = var.location
 }
 
-resource "azurerm_service_plan" "plan" {
-  name                = var.plan_name
+# ACA requires a workspace
+resource "azurerm_log_analytics_workspace" "law" {
+  name                = "${var.env_name}-logs"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  os_type             = "Linux"
-  sku_name            = var.plan_sku   # e.g., B1 or P1v3
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
 }
 
-resource "azurerm_linux_web_app" "app" {
-  name                = var.app_name
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  service_plan_id     = azurerm_service_plan.plan.id
+resource "azurerm_container_app_environment" "env" {
+  name                       = var.env_name
+  location                   = azurerm_resource_group.rg.location
+  resource_group_name        = azurerm_resource_group.rg.name
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
+}
 
-  site_config {
-    application_stack {
-      tomcat_version = "10.1"
-      java_version   = "21"
+resource "azurerm_container_app" "app" {
+  name                         = var.app_name
+  container_app_environment_id = azurerm_container_app_environment.env.id
+  resource_group_name          = azurerm_resource_group.rg.name
+  revision_mode                = "Single"
+
+  # Public ingress on 8080 (Tomcat default)
+  ingress {
+    external_enabled = true
+    target_port      = 8080
+    transport        = "auto"
+  }
+
+  template {
+    container {
+      name   = "tomcat"
+      image  = var.docker_image
+      cpu    = 0.5
+      memory = "1.0Gi"
+
+      # optional readiness check
+      probes {
+        type = "http"
+        port = 8080
+        path = "/"
+      }
+    }
+
+    # simple autoscale rule
+    http_scale_rule {
+      name = "http"
+      metadata = {
+        concurrentRequests = "50"
+      }
     }
   }
 
-  https_only = true
-}
-
-resource "azurerm_application_insights" "ai" {
-  name                = "ai-${var.app_name}"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  application_type    = "web"
-}
-
-resource "azurerm_web_app_application_settings" "appsettings" {
-  resource_group_name = azurerm_resource_group.rg.name
-  name                = azurerm_linux_web_app.app.name
-
-  settings = {
-    APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.ai.connection_string
+  # If your Docker Hub repo is private, keep the registry+secret blocks.
+  # If public, you can delete registry{} and secret{} entirely.
+  dynamic "registry" {
+    for_each = var.dockerhub_username != "" && var.dockerhub_token != "" ? [1] : []
+    content {
+      server              = "index.docker.io"
+      username            = var.dockerhub_username
+      password_secret_name = "dockerhub-token"
+    }
   }
+
+  dynamic "secret" {
+    for_each = var.dockerhub_username != "" && var.dockerhub_token != "" ? [1] : []
+    content {
+      name  = "dockerhub-token"
+      value = var.dockerhub_token
+    }
+  }
+}
+
+output "container_app_url" {
+  value       = "https://${azurerm_container_app.app.latest_revision_fqdn}"
+  description = "Public URL of the Container App"
 }
