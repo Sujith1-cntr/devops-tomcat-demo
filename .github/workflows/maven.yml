@@ -10,6 +10,12 @@ on:
 permissions: 
   id-token: write
   contents: read
+
+env:
+  AZURE_RG: myfirstresource              # <-- PUT YOUR REAL RG NAME
+  AZURE_LOCATION: eastus                 # region of your RG/plan/app
+  AZURE_PLAN: tomcat-linux-plan          # app service plan name
+  AZURE_WEBAPP: QA-deom-app              # web app name (Linux)
   
 jobs:
   build:
