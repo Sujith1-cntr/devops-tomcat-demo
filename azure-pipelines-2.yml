@@ -1,0 +1,25 @@
+trigger: none
+
+pool:
+  name: Default    # or your agent pool name
+  demands: 
+    - agent.name -equals win-agent-01   # ensure this runs only on your new agent
+
+steps:
+- script: |
+    echo "✅ Azure DevOps Self-Hosted Agent Test"
+    echo "Agent Name: $(Agent.Name)"
+    echo "Machine: $(Agent.MachineName)"
+    echo "Running as: $(USERNAME)"
+    echo "OS Version:"
+    systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
+  displayName: "Check basic agent details"
+
+- script: |
+    echo "🧰 Tool Versions"
+    git --version
+    az --version | find "azure-cli"
+    node --version
+    java -version
+    dotnet --info | find "Version"
+  displayName: "Check installed tools"
